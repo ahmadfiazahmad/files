@@ -1,0 +1,10 @@
+VerifyAbroad-AI backend MVP
+
+Locked changes:
+- Gemini primary AI provider
+- Groq fallback provider
+- Tavily primary live web research
+- Gemini Google Search secondary live research
+- Existing FastAPI investigation/verification/risk pipeline retained
+- Supplied fraud knowledge PDF seeded into RAG JSON
+- WHED and SECP manual verification links included
