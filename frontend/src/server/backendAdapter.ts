@@ -114,7 +114,7 @@ export function adaptReport(
       program: toUiStatus("institution"),
       scholarship: "not_applicable",
       agent: toUiStatus("agent"),
-      payment: toUiStatus("payment"),
+      payment: "needs_verification",
     },
     university: null,
     program: null,

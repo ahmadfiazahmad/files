@@ -29,7 +29,7 @@ export async function POST(request: Request) {
     if (backendEnabled()) {
       const created = await backendCreateInvestigation(message || "I need help verifying a study abroad offer.");
       const studentKey = await getStudentKey();
-      let mirror: Awaited<ReturnType<typeof ensureExternalInvestigation>> = null;
+      let mirror: Awaited<ReturnType<typeof ensureExternalInvestigation>> | null = null;
       try {
         mirror = await ensureExternalInvestigation({
           studentKey,
