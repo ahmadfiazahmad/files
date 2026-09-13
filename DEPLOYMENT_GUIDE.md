@@ -201,3 +201,46 @@ lock contention by waiting, not erroring, for reasonable timeout windows.
 If you outgrow this, the migration path is what you already designed:
 swap `DATABASE_URL` to Postgres — no other code changes needed, since the
 codebase already uses SQLAlchemy async models portable across both.
+
+---
+
+# Post-audit integration notes (final corrected build)
+
+The live deployment architecture remains intentionally split:
+
+- **FastAPI backend:** SQLite on a Railway Volume mounted at `/data`.
+- **Next.js frontend:** Railway PostgreSQL for accounts, reference data, and a small mirror/index of live backend investigations used for authenticated History listing.
+- **Browser:** talks only to same-origin Next.js `/api/*` routes.
+- **Next.js server:** talks to FastAPI through `BACKEND_URL` when live backend mode is enabled.
+
+The frontend/backend integration was corrected so external FastAPI investigation IDs remain opaque UUID strings end-to-end. The frontend no longer converts them to JavaScript numbers.
+
+The backend now also exposes a GET investigation endpoint with its stored chat transcript and evidence metadata, plus a context-update endpoint. This allows the frontend to reopen live investigations and edit the investigation profile without falling back to the internal demo engine.
+
+The frontend PostgreSQL `investigations` table now includes nullable `external_id` values for live FastAPI investigations. After deploying the corrected frontend, run the normal Drizzle schema push once so this column/index exists:
+
+```bash
+npm run db:push
+```
+
+No backend SQLite migration is required for the new context fields because they are stored inside the existing JSON `structured_case` column.
+
+The final live backend variables remain:
+
+```text
+ENVIRONMENT=development
+DATABASE_URL=sqlite+aiosqlite:////data/app.db
+STORAGE_BACKEND=local
+LOCAL_UPLOAD_DIR=/data/uploads
+RAG_BACKEND=memory
+CORS_ORIGINS=*
+```
+
+and the frontend live variables are:
+
+```text
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+BACKEND_URL=https://<backend-domain>
+```
+
+Do not set `NEXT_PUBLIC_API_BASE_URL` for the Railway deployment.

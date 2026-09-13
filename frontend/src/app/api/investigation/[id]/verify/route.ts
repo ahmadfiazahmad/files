@@ -2,7 +2,9 @@ import { NextResponse } from "next/server";
 
 import type { Language } from "@/types";
 import { backendEnabled, backendGetResults, backendRunVerification } from "@/server/backendClient";
-import { adaptReport } from "@/server/backendAdapter";
+import { adaptReport, adaptContext } from "@/server/backendAdapter";
+import { getStudentKey } from "@/server/session";
+import { ensureExternalInvestigation, syncExternalInvestigation } from "@/server/repositories/investigations";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +29,8 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
     await backendRunVerification(id);
     const data = await backendGetResults(id);
     const language: Language = "roman_urdu";
-    const result = data.report ? adaptReport(id, language, data.report) : null;
+    const result = data.report ? adaptReport(id, language, data.report, data.display_status) : null;
+    await syncExternalInvestigation({ externalId: id, studentKey: await getStudentKey(), context: adaptContext(data.structured_case), status: data.status, result });
     return NextResponse.json({ status: data.status, result, mode: "external_backend" });
   } catch (error) {
     console.error("verification run failed", error);

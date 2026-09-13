@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 
 import { ChatView } from "@/components/Chat/ChatView";
 import { getInvestigation } from "@/server/repositories/investigations";
+import { backendEnabled, backendGetInvestigation } from "@/server/backendClient";
+import { adaptBackendInvestigation } from "@/server/backendAdapter";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +19,18 @@ export default async function InvestigatePage({
   searchParams: Promise<{ id?: string }>;
 }) {
   const { id } = await searchParams;
-  const investigation = id ? await getInvestigation(Number(id)).catch(() => null) : null;
-  return <ChatView initialInvestigation={investigation} />;
+  let investigation = null;
+  const mode = backendEnabled() ? "external_backend" : "internal_engine" as const;
+  if (id) {
+    if (backendEnabled()) {
+      try {
+        investigation = adaptBackendInvestigation(await backendGetInvestigation(id));
+      } catch {
+        investigation = null;
+      }
+    } else {
+      investigation = await getInvestigation(Number(id)).catch(() => null);
+    }
+  }
+  return <ChatView initialInvestigation={investigation} initialMode={mode} />;
 }

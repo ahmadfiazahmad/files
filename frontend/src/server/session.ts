@@ -22,6 +22,7 @@ export async function setAuthCookie(key: string) {
     sameSite: "lax",
     path: "/",
     maxAge: 60 * 60 * 24 * 30,
+    secure: process.env.NODE_ENV === "production",
   });
 }
 

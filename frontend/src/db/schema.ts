@@ -6,6 +6,7 @@ import {
   pgTable,
   serial,
   text,
+  uniqueIndex,
   timestamp,
 } from "drizzle-orm/pg-core";
 
@@ -103,6 +104,7 @@ export const students = pgTable("students", {
 
 export const investigations = pgTable("investigations", {
   id: serial("id").primaryKey(),
+  externalId: text("external_id"),
   studentKey: text("student_key").notNull(),
   title: text("title").notNull(),
   language: text("language").notNull().default("roman_urdu"),
@@ -119,7 +121,9 @@ export const investigations = pgTable("investigations", {
   latestResult: jsonb("latest_result"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-});
+}, (table) => ({
+  externalIdUnique: uniqueIndex("investigations_external_id_unique").on(table.externalId),
+}));
 
 export const investigationMessages = pgTable("investigation_messages", {
   id: serial("id").primaryKey(),

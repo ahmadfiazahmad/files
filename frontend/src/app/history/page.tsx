@@ -2,7 +2,8 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { ArrowRight, History as HistoryIcon, MessageSquareText } from "lucide-react";
 
-import { listInvestigations } from "@/server/repositories/investigations";
+import { listExternalInvestigations, listInvestigations } from "@/server/repositories/investigations";
+import { backendEnabled } from "@/server/backendClient";
 import { getStudentKey } from "@/server/session";
 import { Card, LinkButton, RiskPill } from "@/components/ui/primitives";
 import { relativeDate } from "@/utils/ui";
@@ -15,7 +16,7 @@ export const metadata: Metadata = {
 
 export default async function HistoryPage() {
   const studentKey = await getStudentKey();
-  const investigations = await listInvestigations(studentKey).catch(() => []);
+  const investigations = await (backendEnabled() ? listExternalInvestigations(studentKey) : listInvestigations(studentKey)).catch(() => []);
 
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:py-12">
@@ -85,8 +86,7 @@ export default async function HistoryPage() {
       )}
 
       <p className="mt-6 text-xs leading-relaxed text-navy-500">
-        Investigations are linked to this browser session only. No sensitive personal data is
-        collected.
+        Investigations are linked to your signed-in account when available; otherwise they use this browser session. No sensitive personal data is collected.
       </p>
     </div>
   );

@@ -34,10 +34,12 @@ export interface UseInvestigation {
   uploadFile: (file: File, label?: string) => Promise<void>;
   submitPastedText: (label: string, text: string) => Promise<void>;
   submitLink: (url: string, label?: string) => Promise<void>;
+  runVerification: () => Promise<void>;
   loadDemo: () => Promise<void>;
   reset: () => void;
   loadExisting: (id: string) => Promise<void>;
   /** Appends a turn produced outside the chat composer (e.g. a profile edit). */
+  mode: "internal_engine" | "external_backend" | "mock_demo";
   appendTurn: (turn: {
     studentMessage?: ChatMessage;
     assistantMessage: ChatMessage;
@@ -55,6 +57,9 @@ export function useInvestigation(initial?: {
   const [messages, setMessages] = useState<ChatMessage[]>(initial?.investigation?.messages ?? []);
   const [isThinking, setIsThinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [mode, setMode] = useState<"internal_engine" | "external_backend" | "mock_demo">(
+    initial?.mode ?? "internal_engine",
+  );
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [pendingSteps, setPendingSteps] = useState<ProgressStep[] | null>(null);
   const [language, setLanguage] = useState<Language>(initial?.language ?? "roman_urdu");
@@ -114,6 +119,7 @@ export function useInvestigation(initial?: {
           // (welcome message + the student's first message), then add the turn.
           const existing = response.investigation?.messages ?? [];
           setMessages(existing.length > 0 ? existing : [optimistic]);
+          setMode(response.mode === "external_backend" ? "external_backend" : "internal_engine");
           if (response.first_turn) pushAssistantTurn(response.first_turn);
         } else {
           const response = await api.sendMessage(idRef.current, {
@@ -122,6 +128,7 @@ export function useInvestigation(initial?: {
             degree_level: degreeLevel,
             funding_type: fundingType,
           });
+          setMode(response.mode === "external_backend" ? "external_backend" : "internal_engine");
           pushAssistantTurn(response);
         }
       } catch (cause) {
@@ -140,7 +147,7 @@ export function useInvestigation(initial?: {
       setIsThinking(true);
       try {
         const id = await ensureInvestigation();
-        const response = await api.uploadEvidence({ investigationId: Number(id), file, label });
+        const response = await api.uploadEvidence({ investigationId: id, file, label });
         setMessages((current) => [
           ...current,
           {
@@ -169,7 +176,7 @@ export function useInvestigation(initial?: {
       try {
         const id = await ensureInvestigation();
         const response = await api.submitPastedEvidence({
-          investigationId: Number(id),
+          investigationId: id,
           label,
           text,
         });
@@ -201,7 +208,7 @@ export function useInvestigation(initial?: {
       try {
         const id = await ensureInvestigation();
         const response = await api.submitLinkEvidence({
-          investigationId: Number(id),
+          investigationId: id,
           url,
           label,
         });
@@ -224,6 +231,35 @@ export function useInvestigation(initial?: {
     },
     [ensureInvestigation],
   );
+
+
+  const runVerification = useCallback(async () => {
+    const id = idRef.current;
+    if (!id) {
+      setError("Start the investigation first, then run verification.");
+      return;
+    }
+    setError(null);
+    setIsThinking(true);
+    try {
+      const response = await api.runVerification(id);
+      setMode(response.mode === "external_backend" ? "external_backend" : "internal_engine");
+      const verificationMessage: ChatMessage = {
+        id: `verification-${Date.now()}`,
+        role: "assistant",
+        text: response.result
+          ? "Full verification is complete. I’ve added the risk report below. Review the warnings and recommended actions before you pay or sign anything."
+          : "Verification completed, but no final report is available yet.",
+        created_at: new Date().toISOString(),
+        result: response.result,
+      };
+      setMessages((current) => [...current, verificationMessage]);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Verification failed. Please try again.");
+    } finally {
+      setIsThinking(false);
+    }
+  }, []);
 
   const addAttachment = useCallback((attachment: ChatAttachment) => {
     setAttachments((current) => [...current, attachment]);
@@ -249,6 +285,7 @@ export function useInvestigation(initial?: {
       setInvestigationId(response.investigation_id);
       const transcript = response.investigation?.messages ?? [];
       setMessages(transcript);
+      setMode(response.mode === "external_backend" ? "external_backend" : "internal_engine");
       if (response.first_turn) pushAssistantTurn(response.first_turn);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not load the demo case.");
@@ -265,6 +302,7 @@ export function useInvestigation(initial?: {
       idRef.current = response.investigation.id;
       setInvestigationId(response.investigation.id);
       setMessages(response.investigation.messages);
+      setMode(response.mode === "external_backend" ? "external_backend" : "internal_engine");
       setDegreeLevel(response.investigation.context.degree_level ?? null);
       setFundingType(response.investigation.context.funding_type ?? null);
     } catch (cause) {
@@ -302,6 +340,7 @@ export function useInvestigation(initial?: {
     attachments,
     pendingSteps,
     latestResult,
+    mode,
     language,
     degreeLevel,
     fundingType,
@@ -314,6 +353,7 @@ export function useInvestigation(initial?: {
     uploadFile,
     submitPastedText,
     submitLink,
+    runVerification,
     loadDemo,
     reset,
     loadExisting,

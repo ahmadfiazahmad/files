@@ -68,6 +68,9 @@ export interface BackendStructuredCase {
   currency: string | null;
   payment_purpose: string | null;
   payment_method: string | null;
+  degree_level: string | null;
+  funding_type: string | null;
+  scholarship: string | null;
   claims: string[];
 }
 
@@ -110,8 +113,6 @@ export interface BackendManualCheck {
 export interface BackendFinalReport {
   risk_level: string;
   risk_score: number;
-  display_status: string;
-  display_emoji: string;
   domains: BackendDomainSummary[];
   fraud_signals: string[];
   recommendation: string;
@@ -134,6 +135,43 @@ export interface BackendReportResponse {
   status: string;
   structured_case: BackendStructuredCase;
   report: BackendFinalReport | null;
+  display_status: string | null;
+  display_emoji: string | null;
+}
+
+export interface BackendMessageRecord {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+}
+
+export interface BackendEvidenceItem {
+  id: string;
+  evidence_type: string;
+  label: string;
+  mime: string | null;
+  size_bytes: number | null;
+  created_at: string;
+}
+
+export interface BackendInvestigationResponse extends BackendReportResponse {
+  messages: BackendMessageRecord[];
+  evidence: BackendEvidenceItem[];
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface BackendInvestigationListItem {
+  investigation_id: string;
+  status: string;
+  structured_case: BackendStructuredCase;
+  risk_level: string | null;
+  summary: string | null;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
 }
 
 export interface BackendEvidenceUploadResponse {
@@ -188,6 +226,31 @@ export async function backendUploadTextEvidence(id: string, text: string) {
     method: "POST",
     body: form,
   });
+}
+
+
+export function backendGetInvestigation(id: string) {
+  return backendFetch<BackendInvestigationResponse>(`/investigations/${encodeURIComponent(id)}`);
+}
+
+export function backendUpdateContext(
+  id: string,
+  updates: Record<string, string | number | null>,
+  note?: string,
+) {
+  return backendFetch<{
+    investigation_id: string;
+    structured_case: BackendStructuredCase;
+    assistant_message: string;
+    ready_for_verification: boolean;
+  }>(`/investigations/${encodeURIComponent(id)}/context`, {
+    method: "POST",
+    body: JSON.stringify({ updates, note }),
+  });
+}
+
+export function backendHealthDetails() {
+  return backendFetch<{ status: string; providers_configured: Record<string, boolean>; database: { status: string } }>("/health");
 }
 
 export async function backendHealth(): Promise<boolean> {

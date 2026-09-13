@@ -14,20 +14,14 @@ import { demoAttachmentFromCase, demoCase, demoFollowUps } from "@/data/mock/dem
 /**
  * Single API seam for the frontend.
  *
- * Set NEXT_PUBLIC_API_BASE_URL to point at the FastAPI backend. When it is not
- * set, the app talks to the built-in Next.js route handlers, which expose the
- * same contract and run the same investigation engine — this is what keeps the
- * product fully functional in demo mode.
+ * The browser always talks to same-origin Next.js route handlers. Live FastAPI
+ * mode is selected server-side with BACKEND_URL; when it is absent, the same
+ * route handlers use the built-in deterministic engine for demo mode.
  *
  * No LLM or provider API key is ever read here: those live server-side only.
  */
 const RAW_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
 const API_BASE = RAW_BASE.replace(/\/$/, "");
-
-export const backendMode: "external_backend" | "internal_engine" =
-  process.env.NEXT_PUBLIC_API_BASE_URL && process.env.NEXT_PUBLIC_API_BASE_URL !== "/api"
-    ? "external_backend"
-    : "internal_engine";
 
 export class ApiError extends Error {
   status: number;
@@ -86,11 +80,11 @@ export const api = {
     });
   },
 
-  getInvestigation(id: string | number) {
+  getInvestigation(id: string) {
     return request<{ investigation: InvestigationRecord }>(`/investigation/${id}`);
   },
 
-  sendMessage(id: string | number, input: SendMessageInput) {
+  sendMessage(id: string, input: SendMessageInput) {
     return request<EngineTurnResponse & { mode: string }>(`/investigation/${id}/message`, {
       method: "POST",
       body: JSON.stringify(input),
@@ -118,7 +112,7 @@ export const api = {
     });
   },
 
-  uploadEvidence(input: { investigationId: number; file: File; label?: string }) {
+  uploadEvidence(input: { investigationId: string; file: File; label?: string }) {
     const form = new FormData();
     form.append("investigation_id", String(input.investigationId));
     form.append("file", input.file);
@@ -131,7 +125,7 @@ export const api = {
   },
 
   submitPastedEvidence(input: {
-    investigationId: number;
+    investigationId: string;
     label: string;
     text: string;
   }) {
@@ -150,7 +144,7 @@ export const api = {
     });
   },
 
-  submitLinkEvidence(input: { investigationId: number; url: string; label?: string }) {
+  submitLinkEvidence(input: { investigationId: string; url: string; label?: string }) {
     return request<{
       evidence_id: string;
       attachment: ChatAttachment;
@@ -246,7 +240,7 @@ export const api = {
    * 501 otherwise (the internal engine scores risk on every chat turn
    * instead of needing a separate verification step).
    */
-  runVerification(id: string | number) {
+  runVerification(id: string) {
     return request<{ status: string; result: InvestigationResult | null; mode: string }>(
       `/investigation/${id}/verify`,
       { method: "POST" },
@@ -254,7 +248,7 @@ export const api = {
   },
 
   /** Polls the backend's stored risk report for an investigation. */
-  getExternalResults(id: string | number) {
+  getExternalResults(id: string) {
     return request<{ status: string; result: InvestigationResult | null; mode: string }>(
       `/investigation/${id}/results`,
     );

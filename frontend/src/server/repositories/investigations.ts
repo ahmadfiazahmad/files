@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNotNull } from "drizzle-orm";
 
 import { db } from "@/db";
 import { ensureSeeded } from "@/db/seed";
@@ -125,6 +125,7 @@ export interface CreateInvestigationInput {
   title?: string;
   language?: Language;
   context?: InvestigationContextSnapshot;
+  externalId?: string;
 }
 
 export async function createInvestigation(input: CreateInvestigationInput) {
@@ -140,6 +141,7 @@ export async function createInvestigation(input: CreateInvestigationInput) {
     .insert(investigations)
     .values({
       studentKey: input.studentKey,
+      externalId: input.externalId ?? null,
       title: title.trim().length > 0 ? title.trim() : "New investigation",
       language: input.language ?? "roman_urdu",
       country: ctx.country ?? null,
@@ -152,6 +154,76 @@ export async function createInvestigation(input: CreateInvestigationInput) {
     })
     .returning();
   return inserted[0];
+}
+
+
+export async function syncExternalInvestigation(input: {
+  externalId: string;
+  studentKey: string;
+  status?: string;
+  context?: InvestigationContextSnapshot;
+  result?: InvestigationResult | null;
+}) {
+  const existing = await getInvestigationRowByExternalId(input.externalId);
+  if (!existing) {
+    return ensureExternalInvestigation({
+      studentKey: input.studentKey,
+      externalId: input.externalId,
+      context: input.context,
+    });
+  }
+  const ctx = input.context ?? {};
+  await db
+    .update(investigations)
+    .set({
+      country: ctx.country ?? existing.country,
+      degreeLevel: ctx.degree_level ?? existing.degreeLevel,
+      programName: ctx.program ?? existing.programName,
+      universityName: ctx.university ?? existing.universityName,
+      scholarshipName: ctx.scholarship ?? existing.scholarshipName,
+      agentName: ctx.agent ?? existing.agentName,
+      fundingType: ctx.funding_type ?? existing.fundingType,
+      status: input.status === "completed" ? "assessed" : input.status ?? existing.status,
+      overallRisk: input.result?.overall_risk ?? existing.overallRisk,
+      summary: input.result?.summary ?? existing.summary,
+      latestResult: input.result ?? existing.latestResult,
+      updatedAt: new Date(),
+    })
+    .where(eq(investigations.id, existing.id));
+  return getInvestigationRow(existing.id);
+}
+
+export async function getInvestigationByExternalId(externalId: string): Promise<InvestigationRecord | null> {
+  await ensureSeeded();
+  const rows = await db
+    .select({ id: investigations.id })
+    .from(investigations)
+    .where(eq(investigations.externalId, externalId))
+    .limit(1);
+  if (!rows[0]) return null;
+  return getInvestigation(rows[0].id);
+}
+
+export async function getInvestigationRowByExternalId(externalId: string) {
+  const rows = await db
+    .select()
+    .from(investigations)
+    .where(eq(investigations.externalId, externalId))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function ensureExternalInvestigation(input: {
+  studentKey: string;
+  externalId: string;
+  title?: string;
+  language?: Language;
+  context?: InvestigationContextSnapshot;
+}) {
+  await ensureSeeded();
+  const existing = await getInvestigationRowByExternalId(input.externalId);
+  if (existing) return existing;
+  return createInvestigation({ ...input, externalId: input.externalId });
 }
 
 export async function getInvestigationRow(id: number) {
@@ -225,6 +297,40 @@ export async function getInvestigation(id: number): Promise<InvestigationRecord 
     created_at: row.createdAt.toISOString(),
     updated_at: row.updatedAt.toISOString(),
   };
+}
+
+export async function listExternalInvestigations(studentKey: string): Promise<InvestigationListItem[]> {
+  await ensureSeeded();
+  const rows = await db
+    .select()
+    .from(investigations)
+    .where(and(eq(investigations.studentKey, studentKey), isNotNull(investigations.externalId)))
+    .orderBy(desc(investigations.updatedAt));
+
+  const counts = await Promise.all(
+    rows.map(async (row) => {
+      const messages = await db
+        .select({ id: investigationMessages.id })
+        .from(investigationMessages)
+        .where(eq(investigationMessages.investigationId, row.id));
+      return messages.length;
+    }),
+  );
+
+  return rows.map((row, index) => ({
+    id: row.externalId!,
+    title: row.title,
+    country: row.country,
+    degree_level: (row.degreeLevel as DegreeLevel | null) ?? null,
+    program: row.programName,
+    university_name: row.universityName,
+    overall_risk: row.overallRisk as RiskLevel,
+    summary: row.summary,
+    status: row.status as InvestigationListItem["status"],
+    created_at: row.createdAt.toISOString(),
+    updated_at: row.updatedAt.toISOString(),
+    message_count: counts[index] ?? 0,
+  }));
 }
 
 export async function listInvestigations(

@@ -17,6 +17,8 @@ import type {
   ChatMessage,
   InvestigationContextSnapshot,
   InvestigationResult,
+  InvestigationRecord,
+  InvestigationListItem,
   Language,
   RiskLevel,
   RiskSignal,
@@ -26,6 +28,8 @@ import type {
 import type {
   BackendFinalReport,
   BackendStructuredCase,
+  BackendInvestigationResponse,
+  BackendInvestigationListItem,
 } from "@/server/backendClient";
 
 function nowIso(): string {
@@ -35,11 +39,11 @@ function nowIso(): string {
 export function adaptContext(sc: BackendStructuredCase): InvestigationContextSnapshot {
   return {
     country: sc.country ?? null,
-    degree_level: null, // backend does not track degree level
+    degree_level: (sc.degree_level as "BS" | "MS" | "PhD" | null) ?? null,
     university: sc.university ?? null,
     program: sc.program ?? null,
-    funding_type: null, // backend does not track funding type
-    scholarship: null, // backend does not track scholarship separately
+    funding_type: (sc.funding_type as InvestigationContextSnapshot["funding_type"]) ?? null,
+    scholarship: sc.scholarship ?? null,
     agent: sc.agent ?? null,
     payment_amount_pkr: sc.payment_amount ?? null,
   };
@@ -71,6 +75,7 @@ export function adaptReport(
   investigationId: string,
   language: Language,
   report: BackendFinalReport,
+  displayStatus?: string | null,
 ): InvestigationResult {
   const riskSignals: RiskSignal[] = report.domains.flatMap((domain) =>
     domain.evidence
@@ -93,7 +98,7 @@ export function adaptReport(
     investigation_id: investigationId,
     language,
     overall_risk: mapRiskLevel(report.risk_level),
-    confidence: report.display_status,
+    confidence: displayStatus ?? "Not available",
     summary: report.recommendation,
     verification: {
       university: "needs_verification",
@@ -146,5 +151,78 @@ export function adaptStudentMessage(text: string): ChatMessage {
     role: "student",
     text,
     created_at: nowIso(),
+  };
+}
+
+
+export function adaptBackendInvestigation(data: BackendInvestigationResponse): InvestigationRecord {
+  const language: Language = "roman_urdu";
+  const result = data.report
+    ? adaptReport(data.investigation_id, language, data.report, data.display_status)
+    : null;
+  const backendMessages: ChatMessage[] = data.messages.map((message) => ({
+    id: message.id,
+    role: message.role === "user" ? "student" : "assistant",
+    text: message.content,
+    created_at: message.created_at,
+  }));
+
+  const evidenceMessages: ChatMessage[] = data.evidence.map((item) => ({
+    id: `backend-evidence-${item.id}`,
+    role: "student",
+    text: `[Evidence attached: ${item.label}]`,
+    created_at: item.created_at,
+    attachments: [{
+      id: item.id,
+      kind: item.evidence_type === "image" ? "screenshot" : "document",
+      label: item.label,
+      mime: item.mime,
+      size_bytes: item.size_bytes,
+      url: null,
+      analysis_status: "analyzed",
+      note: null,
+    }],
+  }));
+
+  const mergedMessages = [...backendMessages, ...evidenceMessages].sort(
+    (a, b) => a.created_at.localeCompare(b.created_at),
+  );
+  if (result) {
+    for (let index = mergedMessages.length - 1; index >= 0; index -= 1) {
+      if (mergedMessages[index].role === "assistant") {
+        mergedMessages[index] = { ...mergedMessages[index], result };
+        break;
+      }
+    }
+  }
+  const now = new Date().toISOString();
+  return {
+    id: data.investigation_id,
+    title: data.structured_case.university ?? data.structured_case.program ?? "Investigation",
+    language,
+    status: data.status === "completed" ? "assessed" : "gathering",
+    overall_risk: result?.overall_risk ?? "pending_more_info",
+    context: adaptContext(data.structured_case),
+    messages: mergedMessages,
+    latest_result: result,
+    created_at: data.created_at ?? now,
+    updated_at: data.updated_at ?? now,
+  };
+}
+
+export function adaptBackendListItem(item: BackendInvestigationListItem): InvestigationListItem {
+  return {
+    id: item.investigation_id,
+    title: item.title,
+    country: item.structured_case.country ?? null,
+    degree_level: null,
+    program: item.structured_case.program ?? null,
+    university_name: item.structured_case.university ?? null,
+    overall_risk: mapRiskLevel(item.risk_level ?? ""),
+    summary: item.summary ?? null,
+    status: item.status === "completed" ? "assessed" : "gathering",
+    created_at: item.created_at,
+    updated_at: item.updated_at,
+    message_count: item.message_count,
   };
 }

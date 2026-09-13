@@ -4,7 +4,9 @@ import { runInvestigationTurn } from "@/server/engine/run";
 import { addEvidence } from "@/server/repositories/investigations";
 import { loadVerificationData } from "@/server/repositories/verification";
 import { backendEnabled, backendUploadFileEvidence, backendUploadTextEvidence } from "@/server/backendClient";
-import { adaptAssistantMessage } from "@/server/backendAdapter";
+import { adaptAssistantMessage, adaptContext } from "@/server/backendAdapter";
+import { getStudentKey } from "@/server/session";
+import { ensureExternalInvestigation, getInvestigationByExternalId, appendMessage } from "@/server/repositories/investigations";
 
 export const dynamic = "force-dynamic";
 
@@ -45,6 +47,9 @@ export async function POST(request: Request) {
         if (!(file instanceof File)) {
           return NextResponse.json({ error: "A file is required" }, { status: 400 });
         }
+        if (file.size > MAX_BYTES) {
+          return NextResponse.json({ error: "File is larger than 10 MB" }, { status: 413 });
+        }
         const kind = kindFor(file.type || null, file.name);
         const uploadResult = await backendUploadFileEvidence(investigationId, file);
         const attachment = {
@@ -61,6 +66,8 @@ export async function POST(request: Request) {
           "Evidence received and processed by the verification backend. Run verification when you're ready for a full risk report.",
           null,
         );
+        const mirror = await ensureExternalInvestigation({ studentKey: await getStudentKey(), externalId: investigationId });
+        await appendMessage({ investigationId: mirror.id, role: "student", text: `[Evidence attached: ${label}]`, attachments: [attachment] });
         return NextResponse.json({
           evidence_id: uploadResult.evidence_id,
           attachment,
@@ -98,6 +105,8 @@ export async function POST(request: Request) {
         "Evidence received and processed by the verification backend. Run verification when you're ready for a full risk report.",
         null,
       );
+      const mirror = await ensureExternalInvestigation({ studentKey: await getStudentKey(), externalId: investigationId });
+      await appendMessage({ investigationId: mirror.id, role: "student", text: isLink ? `[Link submitted: ${body.url}]` : `[${label}]\n${text.slice(0, 400)}`, attachments: [attachment] });
       return NextResponse.json({
         evidence_id: uploadResult.evidence_id,
         attachment,
@@ -123,7 +132,7 @@ export async function POST(request: Request) {
       label = String(form.get("label") ?? "") || (file instanceof File ? file.name : "Evidence");
       if (file instanceof File) {
         if (file.size > MAX_BYTES) {
-          return NextResponse.json({ error: "File is larger than 5 MB" }, { status: 413 });
+          return NextResponse.json({ error: "File is larger than 10 MB" }, { status: 413 });
         }
         mime = file.type || null;
         sizeBytes = file.size;

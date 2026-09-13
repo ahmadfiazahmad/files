@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import type { ChatAttachment, DegreeLevel, FundingType, InvestigationRecord, Language } from "@/types";
 import { startNewInvestigation } from "@/server/engine/run";
 import { getStudentKey } from "@/server/session";
-import { getInvestigation } from "@/server/repositories/investigations";
+import { getInvestigation, getInvestigationByExternalId, ensureExternalInvestigation, appendMessage, syncExternalInvestigation } from "@/server/repositories/investigations";
 import { backendEnabled, backendCreateInvestigation } from "@/server/backendClient";
 import { adaptAssistantMessage, adaptContext, adaptStudentMessage } from "@/server/backendAdapter";
 
@@ -28,8 +28,17 @@ export async function POST(request: Request) {
     // falls through, unchanged, to the internal deterministic engine below.
     if (backendEnabled()) {
       const created = await backendCreateInvestigation(message || "I need help verifying a study abroad offer.");
-      const studentMessage = adaptStudentMessage(message);
+      const studentKey = await getStudentKey();
+      await ensureExternalInvestigation({
+        studentKey,
+        externalId: created.investigation_id,
+        title: created.structured_case.university || message.slice(0, 80) || "New investigation",
+        language,
+        context: adaptContext(created.structured_case),
+      });
+      const studentMessage = adaptStudentMessage(message || "I need help verifying a study abroad offer.");
       const assistantMessage = adaptAssistantMessage(created.assistant_message, null);
+      const mirror = await getInvestigationByExternalId(created.investigation_id);
       const now = new Date().toISOString();
       const investigation: InvestigationRecord = {
         id: created.investigation_id,
@@ -43,6 +52,16 @@ export async function POST(request: Request) {
         created_at: now,
         updated_at: now,
       };
+      if (mirror) {
+        await appendMessage({ investigationId: mirror.id, role: "student", text: message || "I need help verifying a study abroad offer." });
+        await appendMessage({ investigationId: mirror.id, role: "assistant", text: created.assistant_message });
+        await syncExternalInvestigation({
+          externalId: created.investigation_id,
+          studentKey,
+          context: adaptContext(created.structured_case),
+          status: created.ready_for_verification ? "ready_for_verification" : "in_progress",
+        });
+      }
       return NextResponse.json({
         investigation_id: created.investigation_id,
         investigation,

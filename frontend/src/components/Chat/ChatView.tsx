@@ -6,7 +6,7 @@ import { AlertCircle, Loader2, PanelRightOpen, RotateCcw, Sparkles } from "lucid
 import type { InvestigationRecord, Language } from "@/types";
 import { cn } from "@/utils/ui";
 import { useInvestigation } from "@/hooks/useInvestigation";
-import { backendMode, demo, starterPrompts } from "@/services/api";
+import { demo, starterPrompts } from "@/services/api";
 import { Composer } from "@/components/Chat/Composer";
 import { MessageBubble } from "@/components/Chat/MessageBubble";
 import { ProgressTrace, pendingSteps } from "@/components/Investigation/ProgressTrace";
@@ -21,8 +21,17 @@ const LANGUAGES: { value: Language; label: string }[] = [
   { value: "urdu", label: "اردو" },
 ];
 
-export function ChatView({ initialInvestigation }: { initialInvestigation?: InvestigationRecord | null }) {
-  const investigation = useInvestigation({ investigation: initialInvestigation ?? null });
+export function ChatView({
+  initialInvestigation,
+  initialMode = "internal_engine",
+}: {
+  initialInvestigation?: InvestigationRecord | null;
+  initialMode?: "internal_engine" | "external_backend" | "mock_demo";
+}) {
+  const investigation = useInvestigation({
+    investigation: initialInvestigation ?? null,
+    mode: initialMode,
+  });
   const scrollRef = useRef<HTMLDivElement>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
 
@@ -107,6 +116,16 @@ export function ChatView({ initialInvestigation }: { initialInvestigation?: Inve
                   </option>
                 ))}
               </select>
+              {investigation.mode === "external_backend" && investigation.investigationId ? (
+                <button
+                  type="button"
+                  onClick={() => void investigation.runVerification()}
+                  disabled={investigation.isThinking}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1.5 text-xs font-semibold text-brand-800 transition-colors hover:bg-brand-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Run full verification
+                </button>
+              ) : null}
               <button
                 type="button"
                 onClick={() => void investigation.loadDemo()}
@@ -297,7 +316,7 @@ export function ChatView({ initialInvestigation }: { initialInvestigation?: Inve
           </section>
 
           <div className="flex flex-wrap items-center gap-2">
-            <Badge tone="brand">{backendMode === "internal_engine" ? "Demo mode" : "Live backend"}</Badge>
+            <Badge tone="brand">{investigation.mode === "internal_engine" ? "Demo mode" : "Live backend"}</Badge>
             <span className="text-[11px] leading-relaxed text-navy-500">
               Sample verification dataset — community reports shown are demo data.
             </span>
