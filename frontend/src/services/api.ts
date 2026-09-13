@@ -81,7 +81,10 @@ export const api = {
   },
 
   getInvestigation(id: string) {
-    return request<{ investigation: InvestigationRecord }>(`/investigation/${id}`);
+    return request<{
+      investigation: InvestigationRecord;
+      mode: "internal_engine" | "external_backend" | "mock_demo";
+    }>(`/investigation/${id}`);
   },
 
   sendMessage(id: string, input: SendMessageInput) {

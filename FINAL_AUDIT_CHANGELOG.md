@@ -129,3 +129,11 @@ FastAPI directly) and in comments — not a live issue.
   `npm install && npm run typecheck && npm run build` yourself before
   redeploying** and report back if anything still fails — I'd rather say
   that plainly than claim an unrun build passed.
+
+## Final targeted correction — `getInvestigation()` response mode type
+
+- **File:** `frontend/src/services/api.ts`
+- **Problem:** `useInvestigation.loadExisting()` consumes `response.mode`, but the `api.getInvestigation()` return type declared only `investigation`.
+- **Correction:** Updated the return type to include `mode: "internal_engine" | "external_backend" | "mock_demo"`, matching the Next.js route response contract.
+- **Backend changes:** None required for this TypeScript build issue.
+- **Reason:** This is a frontend type-contract correction only; the backend API and database design remain unchanged.
