@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import type { ChatAttachment, DegreeLevel, FundingType, InvestigationRecord, Language } from "@/types";
 import { startNewInvestigation } from "@/server/engine/run";
 import { getStudentKey } from "@/server/session";
-import { getInvestigation, getInvestigationByExternalId, ensureExternalInvestigation, appendMessage, syncExternalInvestigation } from "@/server/repositories/investigations";
+import { getInvestigation, ensureExternalInvestigation, appendMessage, syncExternalInvestigation } from "@/server/repositories/investigations";
 import { backendEnabled, backendCreateInvestigation } from "@/server/backendClient";
 import { adaptAssistantMessage, adaptContext, adaptStudentMessage } from "@/server/backendAdapter";
 
@@ -29,7 +29,7 @@ export async function POST(request: Request) {
     if (backendEnabled()) {
       const created = await backendCreateInvestigation(message || "I need help verifying a study abroad offer.");
       const studentKey = await getStudentKey();
-      await ensureExternalInvestigation({
+      const mirror = await ensureExternalInvestigation({
         studentKey,
         externalId: created.investigation_id,
         title: created.structured_case.university || message.slice(0, 80) || "New investigation",
@@ -38,7 +38,6 @@ export async function POST(request: Request) {
       });
       const studentMessage = adaptStudentMessage(message || "I need help verifying a study abroad offer.");
       const assistantMessage = adaptAssistantMessage(created.assistant_message, null);
-      const mirror = await getInvestigationByExternalId(created.investigation_id);
       const now = new Date().toISOString();
       const investigation: InvestigationRecord = {
         id: created.investigation_id,

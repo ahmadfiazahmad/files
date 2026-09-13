@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from database.session import get_db
-from database.models import Investigation, Message
+from database.models import Investigation, Message, EvidenceItem
 from schemas.case import (
     StructuredCase,
     InvestigationCreateRequest,

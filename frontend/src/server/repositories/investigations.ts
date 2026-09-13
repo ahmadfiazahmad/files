@@ -183,7 +183,7 @@ export async function syncExternalInvestigation(input: {
       scholarshipName: ctx.scholarship ?? existing.scholarshipName,
       agentName: ctx.agent ?? existing.agentName,
       fundingType: ctx.funding_type ?? existing.fundingType,
-      status: input.status === "completed" ? "assessed" : input.status ?? existing.status,
+      status: input.status === "completed" ? "assessed" : "gathering",
       overallRisk: input.result?.overall_risk ?? existing.overallRisk,
       summary: input.result?.summary ?? existing.summary,
       latestResult: input.result ?? existing.latestResult,

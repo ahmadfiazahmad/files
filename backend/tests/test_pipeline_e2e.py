@@ -250,6 +250,18 @@ def test_full_pipeline_chat_to_report():
             for record in domain["evidence"]:
                 assert record["source"]  # every record is attributed to a real source
 
+        # 5. Fetch the complete investigation transcript/evidence endpoint.
+        # This exercises the endpoint added for the live Next.js reopen flow.
+        resp = client.get(f"/investigations/{investigation_id}")
+        assert resp.status_code == 200, resp.text
+        investigation_body = resp.json()
+        assert investigation_body["investigation_id"] == investigation_id
+        assert investigation_body["status"] == "completed"
+        assert len(investigation_body["messages"]) >= 2
+        assert len(investigation_body["evidence"]) == 1
+        assert investigation_body["display_status"] == "HIGH_RISK"
+        assert investigation_body["display_emoji"] == "🔴"
+
 
 def test_verify_rejects_incomplete_case():
     """Input validation: /verify should refuse a case that never gathered

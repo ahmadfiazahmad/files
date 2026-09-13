@@ -238,12 +238,7 @@ export function backendUpdateContext(
   updates: Record<string, string | number | null>,
   note?: string,
 ) {
-  return backendFetch<{
-    investigation_id: string;
-    structured_case: BackendStructuredCase;
-    assistant_message: string;
-    ready_for_verification: boolean;
-  }>(`/investigations/${encodeURIComponent(id)}/context`, {
+  return backendFetch<BackendMessageResponse>(`/investigations/${encodeURIComponent(id)}/context`, {
     method: "POST",
     body: JSON.stringify({ updates, note }),
   });

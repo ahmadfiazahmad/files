@@ -1,12 +1,11 @@
 import { NextResponse } from "next/server";
 
 import { runInvestigationTurn } from "@/server/engine/run";
-import { addEvidence } from "@/server/repositories/investigations";
+import { addEvidence, ensureExternalInvestigation, appendMessage } from "@/server/repositories/investigations";
 import { loadVerificationData } from "@/server/repositories/verification";
 import { backendEnabled, backendUploadFileEvidence, backendUploadTextEvidence } from "@/server/backendClient";
 import { adaptAssistantMessage, adaptContext } from "@/server/backendAdapter";
 import { getStudentKey } from "@/server/session";
-import { ensureExternalInvestigation, getInvestigationByExternalId, appendMessage } from "@/server/repositories/investigations";
 
 export const dynamic = "force-dynamic";
 

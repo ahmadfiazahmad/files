@@ -109,10 +109,12 @@ the browser call FastAPI directly instead of proxying through Next.js.
    then proxy server-side to `BACKEND_URL`. This is the simpler, more
    secure default and avoids needing real CORS configuration at all.
 
-3. Railway auto-detects Node via `package.json`; `railway.json` sets the
-   build/start commands (`npm run build` / `npm run start`), and `next start`
-   automatically binds to Railway's injected `$PORT` (verified directly —
-   no `-p` flag needed).
+3. Railway uses the `/frontend` root directory and Railpack's Node/Next.js
+   detection. Leave custom build/start commands empty unless Railway fails
+   to detect them; `package.json` provides `npm run build` and `npm run start`,
+   and `next start` binds to Railway's injected `$PORT`. The frontend no longer
+   relies on a `railway.json` config file; its deployment settings are managed
+   in the Railway service configuration.
 4. Deploy. Check `https://<frontend-service>.up.railway.app/api/health` —
    should return `{"ok": true}`.
 5. **Copy this frontend URL.**
@@ -173,7 +175,8 @@ risk engine, database models, and the existing Alembic migration.
   from the environment instead of a hardcoded local connection string
   (verified this loads correctly).
 - `package.json`: added `engines.node`, added a `db:push` script.
-- Added `railway.json`.
+- Removed the frontend `railway.json` so the new Railway frontend service uses
+  the dashboard's Railpack configuration instead of the legacy Nixpacks builder.
 
 **Frontend — left as-is:** all business logic, the internal deterministic
 engine, the backend adapter/client, all UI/routes, the auth system.
