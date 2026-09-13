@@ -24,10 +24,41 @@ from schemas.case import (
 from risk.display_status import derive_display_status
 from schemas.report import FinalReport
 from agents.investigator import run_investigation_turn
+from api.verification import run_verification_pipeline
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/investigations", tags=["investigation"])
+
+MAX_QUESTIONS_BEFORE_FORCED_VERIFICATION = 5
+
+
+def _count_user_turns(history: list[dict]) -> int:
+    return sum(1 for m in history if m.get("role") == "user")
+
+
+def _short_report_text(final_report: FinalReport, risk_score: int, risk_level: str) -> str:
+    """
+    5-10 line plain-text verdict for the chat bubble. The full structured
+    report (all domains/evidence) is still stored normally and available via
+    GET /investigations/{id} for any richer UI - this is just the
+    human-readable chat summary.
+    """
+    verdict = "This looks like a likely SCAM" if risk_level in ("HIGH", "VERY_HIGH") else (
+        "This has some things worth checking before you proceed" if risk_level == "MEDIUM"
+        else "This looks reasonably safe based on what we could verify"
+    )
+    lines = [
+        f"**Verdict: {verdict}** (risk score {risk_score}/100, {risk_level})",
+        "",
+        final_report.recommendation,
+    ]
+    if final_report.fraud_signals:
+        lines.append("")
+        lines.append("Red flags found: " + "; ".join(final_report.fraud_signals[:4]))
+    lines.append("")
+    lines.append(f"Next step: {final_report.safer_action}")
+    return "\n".join(lines)
 
 
 @router.post("", response_model=InvestigationCreateResponse)
@@ -63,7 +94,6 @@ async def create_investigation(
 
     investigation.structured_case = updated_case.model_dump()
     investigation.status = "ready_for_verification" if ready else "in_progress"
-
     await db.commit()
 
     return InvestigationCreateResponse(
@@ -115,6 +145,13 @@ async def continue_investigation(
         await db.rollback()
         raise HTTPException(status_code=502, detail=f"Investigation assistant is temporarily unavailable: {exc}") from exc
 
+    # Hard cap: even if the model keeps finding reasons to ask another
+    # question, force a move to verification after 5 user turns so the chat
+    # can never loop indefinitely.
+    user_turns = _count_user_turns(history)
+    if not ready and user_turns >= MAX_QUESTIONS_BEFORE_FORCED_VERIFICATION:
+        ready = True
+
     assistant_msg = Message(
         investigation_id=investigation_id, role="assistant", content=assistant_message
     )
@@ -122,8 +159,31 @@ async def continue_investigation(
 
     investigation.structured_case = updated_case.model_dump()
     investigation.status = "ready_for_verification" if ready else "in_progress"
-
     await db.commit()
+
+    if ready and updated_case.is_sufficient_for_verification():
+        try:
+            final_report, risk_score, risk_level, _, _, _ = await run_verification_pipeline(investigation, db)
+            assistant_message = _short_report_text(final_report, risk_score, risk_level)
+            report_msg = Message(investigation_id=investigation_id, role="assistant", content=assistant_message)
+            db.add(report_msg)
+            await db.commit()
+        except Exception as exc:
+            logger.error("Auto-verification failed for investigation_id=%s: %s", investigation_id, exc, exc_info=True)
+            # Keep the investigator's own message; student can click
+            # "Run full verification" manually as a fallback.
+    elif ready and not updated_case.is_sufficient_for_verification():
+        # Hit the question cap but still don't have university+agent/payment -
+        # be honest about it in the chat instead of silently trying to verify
+        # near-empty data.
+        assistant_message = (
+            "I don't have quite enough confirmed details yet (I still need at least the "
+            "university name, plus either the agent's name or the payment amount) to run "
+            "a reliable check. Please share whatever you do know and I'll do my best with it."
+        )
+        followup_msg = Message(investigation_id=investigation_id, role="assistant", content=assistant_message)
+        db.add(followup_msg)
+        await db.commit()
 
     return MessageResponse(
         assistant_message=assistant_message,

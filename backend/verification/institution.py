@@ -1,21 +1,17 @@
 import asyncio
 from agents.normalizer import normalize_source_result
-from research import hipo, tavily, gemini_search
+from research import tavily, gemini_search
 from data.loader import lookup_hec_institution
 from schemas.evidence import EvidenceRecord, Domain, AuthorityLevel
 
 async def verify_institution(university: str | None, country: str | None) -> list[EvidenceRecord]:
     if not university:
         return []
-    hipo_raw, tavily_raw, gemini_raw = await asyncio.gather(
-        hipo.search_university(university, country),
+    tavily_raw, gemini_raw = await asyncio.gather(
         tavily.check_institution_recognition(university, country or "the relevant country"),
         gemini_search.check_institution_recognition(university, country or "the relevant country"),
     )
     records = await asyncio.gather(
-        normalize_source_result(Domain.institution,
-            f'"{university}" appears in the Hipo university directory',
-            "Hipo Universities API", "hipo", AuthorityLevel.medium, hipo_raw),
         normalize_source_result(Domain.institution,
             f'"{university}" is officially recognized in {country or "its country"}',
             "Tavily live web research", "tavily_web", AuthorityLevel.high, tavily_raw),

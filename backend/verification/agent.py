@@ -1,6 +1,6 @@
 import asyncio
 from agents.normalizer import normalize_source_result
-from research import opensanctions, tavily, gemini_search
+from research import tavily, gemini_search
 from data.loader import lookup_banned_agent
 from rag.retriever import search_fraud_patterns
 from schemas.evidence import EvidenceRecord, Domain, AuthorityLevel
@@ -9,7 +9,6 @@ async def verify_agent(agent_name: str | None, university: str | None, country: 
     if not agent_name:
         return []
     tasks = [
-        opensanctions.screen_entity(agent_name, country),
         tavily.check_scam_warnings(agent_name),
         gemini_search.check_scam_warnings(agent_name),
     ]
@@ -19,11 +18,10 @@ async def verify_agent(agent_name: str | None, university: str | None, country: 
             gemini_search.check_agent_authorization(university, agent_name),
         ]
     results = await asyncio.gather(*tasks)
-    sanction, tavily_scam, gemini_scam = results[:3]
-    tavily_auth = results[3] if university else None
-    gemini_auth = results[4] if university else None
+    tavily_scam, gemini_scam = results[:2]
+    tavily_auth = results[2] if university else None
+    gemini_auth = results[3] if university else None
     norm = [
-        normalize_source_result(Domain.agent, f'"{agent_name}" has a relevant regulatory/watchlist match', "OpenSanctions API", "opensanctions", AuthorityLevel.high, sanction),
         normalize_source_result(Domain.agent, f'"{agent_name}" has public fraud/scam warnings', "Tavily live web research", "tavily_web", AuthorityLevel.medium, tavily_scam),
         normalize_source_result(Domain.agent, f'"{agent_name}" has public fraud/scam warnings', "Gemini Google Search grounding", "gemini_search", AuthorityLevel.medium, gemini_scam),
     ]
