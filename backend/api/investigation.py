@@ -87,14 +87,23 @@ async def create_investigation(
         await db.rollback()
         raise HTTPException(status_code=502, detail=f"Investigation assistant is temporarily unavailable: {exc}") from exc
 
-    assistant_msg = Message(
-        investigation_id=investigation.id, role="assistant", content=assistant_message
-    )
-    db.add(assistant_msg)
-
     investigation.structured_case = updated_case.model_dump()
     investigation.status = "ready_for_verification" if ready else "in_progress"
+    db.add(Message(investigation_id=investigation.id, role="assistant", content=assistant_message))
     await db.commit()
+
+    # Demo-friendly behavior: as soon as the minimum useful information is
+    # present, run verification automatically instead of making the student
+    # discover a second button. The same explicit /verify endpoint remains
+    # available for re-runs.
+    if ready and updated_case.is_sufficient_for_verification():
+        try:
+            final_report, risk_score, risk_level, _, _, _ = await run_verification_pipeline(investigation, db)
+            assistant_message = _short_report_text(final_report, risk_score, risk_level)
+            db.add(Message(investigation_id=investigation.id, role="assistant", content=assistant_message))
+            await db.commit()
+        except Exception as exc:
+            logger.error("Auto-verification failed while creating investigation: %s", exc, exc_info=True)
 
     return InvestigationCreateResponse(
         investigation_id=investigation.id,

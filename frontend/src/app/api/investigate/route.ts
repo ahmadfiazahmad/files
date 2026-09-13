@@ -4,8 +4,8 @@ import type { ChatAttachment, DegreeLevel, FundingType, InvestigationRecord, Lan
 import { startNewInvestigation } from "@/server/engine/run";
 import { getStudentKey } from "@/server/session";
 import { getInvestigation, ensureExternalInvestigation, appendMessage, syncExternalInvestigation } from "@/server/repositories/investigations";
-import { backendEnabled, backendCreateInvestigation } from "@/server/backendClient";
-import { adaptAssistantMessage, adaptContext, adaptStudentMessage } from "@/server/backendAdapter";
+import { backendEnabled, backendCreateInvestigation, backendGetResults, backendRunVerification } from "@/server/backendClient";
+import { adaptAssistantMessage, adaptContext, adaptStudentMessage, adaptReport } from "@/server/backendAdapter";
 
 export const dynamic = "force-dynamic";
 
@@ -29,15 +29,32 @@ export async function POST(request: Request) {
     if (backendEnabled()) {
       const created = await backendCreateInvestigation(message || "I need help verifying a study abroad offer.");
       const studentKey = await getStudentKey();
-      const mirror = await ensureExternalInvestigation({
-        studentKey,
-        externalId: created.investigation_id,
-        title: created.structured_case.university || message.slice(0, 80) || "New investigation",
-        language,
-        context: adaptContext(created.structured_case),
-      });
+      let mirror: Awaited<ReturnType<typeof ensureExternalInvestigation>> = null;
+      try {
+        mirror = await ensureExternalInvestigation({
+          studentKey,
+          externalId: created.investigation_id,
+          title: created.structured_case.university || message.slice(0, 80) || "New investigation",
+          language,
+          context: adaptContext(created.structured_case),
+        });
+      } catch (mirrorError) {
+        console.warn("Frontend mirror unavailable; continuing with FastAPI backend", mirrorError);
+      }
       const studentMessage = adaptStudentMessage(message || "I need help verifying a study abroad offer.");
-      const assistantMessage = adaptAssistantMessage(created.assistant_message, null);
+      let reportResult = null;
+      if (created.ready_for_verification) {
+        try {
+          await backendRunVerification(created.investigation_id);
+          const reportData = await backendGetResults(created.investigation_id);
+          if (reportData.report) {
+            reportResult = adaptReport(created.investigation_id, language, reportData.report, reportData.display_status);
+          }
+        } catch (verificationError) {
+          console.warn("Automatic verification did not complete", verificationError);
+        }
+      }
+      const assistantMessage = adaptAssistantMessage(created.assistant_message, reportResult);
       const now = new Date().toISOString();
       const investigation: InvestigationRecord = {
         id: created.investigation_id,
@@ -47,7 +64,7 @@ export async function POST(request: Request) {
         overall_risk: "pending_more_info",
         context: adaptContext(created.structured_case),
         messages: [studentMessage, assistantMessage],
-        latest_result: null,
+        latest_result: reportResult,
         created_at: now,
         updated_at: now,
       };
@@ -64,7 +81,7 @@ export async function POST(request: Request) {
       return NextResponse.json({
         investigation_id: created.investigation_id,
         investigation,
-        first_turn: { assistantMessage, result: null },
+        first_turn: { assistantMessage, result: reportResult },
         mode: "external_backend",
       });
     }

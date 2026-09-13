@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 
 import type { ChatAttachment, DegreeLevel, FundingType } from "@/types";
 import { runInvestigationTurn } from "@/server/engine/run";
-import { backendEnabled, backendContinueInvestigation } from "@/server/backendClient";
-import { adaptAssistantMessage, adaptContext } from "@/server/backendAdapter";
+import { backendEnabled, backendContinueInvestigation, backendGetResults, backendRunVerification } from "@/server/backendClient";
+import { adaptAssistantMessage, adaptContext, adaptReport } from "@/server/backendAdapter";
 import { getStudentKey } from "@/server/session";
 import { ensureExternalInvestigation, appendMessage, syncExternalInvestigation } from "@/server/repositories/investigations";
 
@@ -30,15 +30,29 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     // not the numeric ids the internal engine uses — do not coerce with Number().
     if (backendEnabled()) {
       const backendResult = await backendContinueInvestigation(id, text);
-      const assistantMessage = adaptAssistantMessage(backendResult.assistant_message, null);
+      let reportResult = null;
+      if (backendResult.ready_for_verification) {
+        try {
+          await backendRunVerification(id);
+          const reportData = await backendGetResults(id);
+          if (reportData.report) reportResult = adaptReport(id, "roman_urdu", reportData.report, reportData.display_status);
+        } catch (verificationError) {
+          console.warn("Automatic verification after chat turn failed", verificationError);
+        }
+      }
+      const assistantMessage = adaptAssistantMessage(backendResult.assistant_message, reportResult);
       const studentKey = await getStudentKey();
-      const mirror = await ensureExternalInvestigation({ studentKey, externalId: id, context: adaptContext(backendResult.structured_case) });
-      await appendMessage({ investigationId: mirror.id, role: "student", text });
-      await appendMessage({ investigationId: mirror.id, role: "assistant", text: backendResult.assistant_message });
-      await syncExternalInvestigation({ externalId: id, studentKey, context: adaptContext(backendResult.structured_case), status: backendResult.ready_for_verification ? "ready_for_verification" : "in_progress" });
+      try {
+        const mirror = await ensureExternalInvestigation({ studentKey, externalId: id, context: adaptContext(backendResult.structured_case) });
+        await appendMessage({ investigationId: mirror.id, role: "student", text });
+        await appendMessage({ investigationId: mirror.id, role: "assistant", text: backendResult.assistant_message });
+        await syncExternalInvestigation({ externalId: id, studentKey, context: adaptContext(backendResult.structured_case), status: backendResult.ready_for_verification ? "completed" : "in_progress", result: reportResult });
+      } catch (mirrorError) {
+        console.warn("Frontend mirror unavailable; continuing with FastAPI backend", mirrorError);
+      }
       return NextResponse.json({
         assistantMessage,
-        result: null,
+        result: reportResult,
         mode: "external_backend",
       });
     }

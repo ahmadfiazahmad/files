@@ -79,7 +79,8 @@ export function useInvestigation(initial?: {
     assistantMessage: ChatMessage;
     result: InvestigationResult | null;
   }) => {
-    setMessages((current) => [...current, turn.assistantMessage]);
+    const message = turn.result ? { ...turn.assistantMessage, result: turn.result } : turn.assistantMessage;
+    setMessages((current) => [...current, message]);
   }, []);
 
   const ensureInvestigation = useCallback(async (): Promise<string> => {
