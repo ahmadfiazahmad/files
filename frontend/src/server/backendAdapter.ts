@@ -94,15 +94,6 @@ export function adaptReport(
     source: "government",
   }));
 
-  const byDomain = new Map(report.domains.map((d) => [d.domain, d]));
-  const toUiStatus = (domain: string) => {
-    const value = (byDomain.get(domain)?.status ?? "UNABLE_TO_VERIFY").toUpperCase();
-    if (value === "VERIFIED") return "verified" as const;
-    if (value === "SUSPICIOUS" || value === "CONTRADICTED") return "conflicts" as const;
-    if (value === "NOT_FOUND") return "not_found" as const;
-    return "needs_verification" as const;
-  };
-
   return {
     investigation_id: investigationId,
     language,
@@ -110,10 +101,10 @@ export function adaptReport(
     confidence: displayStatus ?? "Not available",
     summary: report.recommendation,
     verification: {
-      university: toUiStatus("institution"),
-      program: toUiStatus("institution"),
+      university: "needs_verification",
+      program: "not_applicable",
       scholarship: "not_applicable",
-      agent: toUiStatus("agent"),
+      agent: "needs_verification",
       payment: "needs_verification",
     },
     university: null,

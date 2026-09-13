@@ -5,7 +5,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from database.session import get_db
 from database.models import Investigation, EvidenceItem
 from schemas.evidence import EvidenceUploadResponse
-from schemas.case import StructuredCase
 from agents.document_parser import parse_file_evidence, parse_text_evidence
 from storage.base import save_file
 
@@ -63,35 +62,14 @@ async def upload_evidence(
         evidence_type = "text"
         raw_text = text
 
-    extracted_data = extracted.model_dump()
-    # Merge evidence facts into the live case so an attached screenshot/PDF can
-    # supply the same fields as chat input.
-    current = StructuredCase(**(investigation.structured_case or {})).model_dump()
-    mapping = {
-        "agent_name": "agent", "payment_amount": "payment_amount",
-        "currency": "currency", "payment_method": "payment_method",
-        "program": "program", "university": "university",
-    }
-    for source_key, target_key in mapping.items():
-        value = extracted_data.get(source_key)
-        if value not in (None, ""):
-            current[target_key] = value
-    if extracted_data.get("claims"):
-        current["claims"] = list(dict.fromkeys([*(current.get("claims") or []), *extracted_data["claims"]]))[:20]
-    investigation.structured_case = current
     item = EvidenceItem(
         investigation_id=investigation_id,
         evidence_type=evidence_type,
         file_path=path,
         raw_text=raw_text,
-        extracted_data=extracted_data,
+        extracted_data=extracted.model_dump(),
     )
     db.add(item)
-    from database.models import Message
-    db.add(Message(
-        investigation_id=investigation_id, role="assistant",
-        content="Evidence received and analyzed. I’ve added its extracted claims to this investigation.\nYou can run verification when ready."
-    ))
     await db.commit()
     await db.refresh(item)
     return EvidenceUploadResponse(

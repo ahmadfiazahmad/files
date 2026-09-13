@@ -1,203 +1,115 @@
-"""
-Investigation chat endpoints - starting a case and continuing the conversation.
-"""
+"""Simple hackathon investigation API: collect information, verify, report."""
 import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from database.models import EvidenceItem, EvidenceRecord as EvidenceRecordModel, Investigation, Message
 from database.session import get_db
-from database.models import Investigation, Message, EvidenceItem
 from schemas.case import (
-    StructuredCase,
-    InvestigationCreateRequest,
-    InvestigationCreateResponse,
-    MessageRequest,
-    MessageResponse,
-    MessageRecord,
-    EvidenceItemSummary,
-    InvestigationResponse,
-    ContextUpdateRequest,
+    ContextUpdateRequest, EvidenceItemSummary, InvestigationCreateRequest,
+    InvestigationCreateResponse, InvestigationResponse, MessageRecord,
+    MessageRequest, MessageResponse, StructuredCase,
 )
-from risk.display_status import derive_display_status
 from schemas.report import FinalReport
-from agents.investigator import run_investigation_turn
-from api.verification import run_verification_pipeline
+from risk.display_status import derive_display_status
+from simple_verifier import extract_and_merge_case, run_simple_verification
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/investigations", tags=["investigation"])
 
-MAX_QUESTIONS_BEFORE_FORCED_VERIFICATION = 5
 
-
-def _count_user_turns(history: list[dict]) -> int:
-    return sum(1 for m in history if m.get("role") == "user")
-
-
-def _short_report_text(final_report: FinalReport, risk_score: int, risk_level: str) -> str:
-    """
-    5-10 line plain-text verdict for the chat bubble. The full structured
-    report (all domains/evidence) is still stored normally and available via
-    GET /investigations/{id} for any richer UI - this is just the
-    human-readable chat summary.
-    """
-    verdict = "This looks like a likely SCAM" if risk_level in ("HIGH", "VERY_HIGH") else (
-        "This has some things worth checking before you proceed" if risk_level == "MEDIUM"
-        else "This looks reasonably safe based on what we could verify"
-    )
+def _chat_report(report: FinalReport) -> str:
+    level = report.risk_level.upper()
+    verdict = {
+        "LOW": "LOW RISK / NO OBVIOUS RED FLAGS FOUND",
+        "MEDIUM": "CAUTION / SOME DETAILS NEED CONFIRMATION",
+        "HIGH": "HIGH RISK / MULTIPLE RED FLAGS FOUND",
+        "VERY_HIGH": "VERY HIGH RISK / STRONG FRAUD SIGNALS FOUND",
+    }.get(level, f"{level} RISK")
     lines = [
-        f"**Verdict: {verdict}** (risk score {risk_score}/100, {risk_level})",
-        "",
-        final_report.recommendation,
+        f"**Verification result: {verdict}** — risk score {report.risk_score}/100.",
+        report.recommendation,
     ]
-    if final_report.fraud_signals:
-        lines.append("")
-        lines.append("Red flags found: " + "; ".join(final_report.fraud_signals[:4]))
-    lines.append("")
-    lines.append(f"Next step: {final_report.safer_action}")
-    return "\n".join(lines)
+    if report.fraud_signals:
+        lines.append("Red flags: " + "; ".join(report.fraud_signals[:3]))
+    lines.append("Next step: " + report.safer_action)
+    return "\n\n".join(lines)
+
+
+async def _save_report(investigation: Investigation, db: AsyncSession, raw_message: str) -> str:
+    case = StructuredCase(**(investigation.structured_case or {}))
+    result = await db.execute(
+        select(EvidenceItem)
+        .where(EvidenceItem.investigation_id == investigation.id)
+        .order_by(EvidenceItem.created_at.desc())
+    )
+    evidence_items = list(result.scalars().all())
+    report = await run_simple_verification(case, raw_message, evidence_items)
+
+    investigation.risk_score = report.risk_score
+    investigation.risk_level = report.risk_level
+    investigation.final_report = report.model_dump(mode="json")
+    investigation.status = "completed"
+    return _chat_report(report)
 
 
 @router.post("", response_model=InvestigationCreateResponse)
-async def create_investigation(
-    payload: InvestigationCreateRequest, db: AsyncSession = Depends(get_db)
-):
+async def create_investigation(payload: InvestigationCreateRequest, db: AsyncSession = Depends(get_db)):
     if not payload.initial_message or not payload.initial_message.strip():
         raise HTTPException(status_code=400, detail="initial_message must not be empty")
 
     investigation = Investigation(structured_case={})
     db.add(investigation)
-    await db.flush()  # get the generated id before commit
-
-    user_msg = Message(
-        investigation_id=investigation.id, role="user", content=payload.initial_message
-    )
-    db.add(user_msg)
+    await db.flush()
+    db.add(Message(investigation_id=investigation.id, role="user", content=payload.initial_message))
 
     try:
-        assistant_message, updated_case, ready = await run_investigation_turn(
-            conversation_history=[{"role": "user", "content": payload.initial_message}],
-            current_case=StructuredCase(),
-        )
+        case = await extract_and_merge_case(payload.initial_message, StructuredCase())
+        investigation.structured_case = case.model_dump()
+        assistant_message = await _save_report(investigation, db, payload.initial_message)
+        db.add(Message(investigation_id=investigation.id, role="assistant", content=assistant_message))
+        await db.commit()
     except Exception as exc:
-        logger.error("Investigator turn failed while creating investigation: %s", exc, exc_info=True)
+        logger.error("Simple investigation failed: %s", exc, exc_info=True)
         await db.rollback()
         raise HTTPException(status_code=502, detail=f"Investigation assistant is temporarily unavailable: {exc}") from exc
-
-    investigation.structured_case = updated_case.model_dump()
-    investigation.status = "ready_for_verification" if ready else "in_progress"
-    db.add(Message(investigation_id=investigation.id, role="assistant", content=assistant_message))
-    await db.commit()
-
-    # Demo-friendly behavior: as soon as the minimum useful information is
-    # present, run verification automatically instead of making the student
-    # discover a second button. The same explicit /verify endpoint remains
-    # available for re-runs.
-    if ready and updated_case.is_sufficient_for_verification():
-        try:
-            final_report, risk_score, risk_level, _, _, _ = await run_verification_pipeline(investigation, db)
-            assistant_message = _short_report_text(final_report, risk_score, risk_level)
-            db.add(Message(investigation_id=investigation.id, role="assistant", content=assistant_message))
-            await db.commit()
-        except Exception as exc:
-            logger.error("Auto-verification failed while creating investigation: %s", exc, exc_info=True)
 
     return InvestigationCreateResponse(
         investigation_id=investigation.id,
         assistant_message=assistant_message,
-        structured_case=updated_case,
-        ready_for_verification=ready,
+        structured_case=StructuredCase(**investigation.structured_case),
+        ready_for_verification=True,
     )
 
 
 @router.post("/{investigation_id}/messages", response_model=MessageResponse)
-async def continue_investigation(
-    investigation_id: str, payload: MessageRequest, db: AsyncSession = Depends(get_db)
-):
+async def continue_investigation(investigation_id: str, payload: MessageRequest, db: AsyncSession = Depends(get_db)):
     if not payload.message or not payload.message.strip():
         raise HTTPException(status_code=400, detail="message must not be empty")
-
     investigation = await db.get(Investigation, investigation_id)
     if not investigation:
         raise HTTPException(status_code=404, detail="Investigation not found")
 
-    if investigation.status not in ("in_progress", "ready_for_verification"):
-        raise HTTPException(
-            status_code=409,
-            detail=f"Cannot continue chat on an investigation with status={investigation.status!r}.",
-        )
-
-    result = await db.execute(
-        select(Message)
-        .where(Message.investigation_id == investigation_id)
-        .order_by(Message.created_at)
-    )
-    history = [{"role": m.role, "content": m.content} for m in result.scalars().all()]
-    history.append({"role": "user", "content": payload.message})
-
-    user_msg = Message(investigation_id=investigation_id, role="user", content=payload.message)
-    db.add(user_msg)
-
-    current_case = StructuredCase(**investigation.structured_case)
+    current = StructuredCase(**(investigation.structured_case or {}))
+    db.add(Message(investigation_id=investigation_id, role="user", content=payload.message))
     try:
-        assistant_message, updated_case, ready = await run_investigation_turn(
-            conversation_history=history, current_case=current_case
-        )
-    except Exception as exc:
-        logger.error(
-            "Investigator turn failed for investigation_id=%s: %s",
-            investigation_id, exc, exc_info=True,
-        )
-        await db.rollback()
-        raise HTTPException(status_code=502, detail=f"Investigation assistant is temporarily unavailable: {exc}") from exc
-
-    # Hard cap: even if the model keeps finding reasons to ask another
-    # question, force a move to verification after 5 user turns so the chat
-    # can never loop indefinitely.
-    user_turns = _count_user_turns(history)
-    if not ready and user_turns >= MAX_QUESTIONS_BEFORE_FORCED_VERIFICATION:
-        ready = True
-
-    assistant_msg = Message(
-        investigation_id=investigation_id, role="assistant", content=assistant_message
-    )
-    db.add(assistant_msg)
-
-    investigation.structured_case = updated_case.model_dump()
-    investigation.status = "ready_for_verification" if ready else "in_progress"
-    await db.commit()
-
-    if ready and updated_case.is_sufficient_for_verification():
-        try:
-            final_report, risk_score, risk_level, _, _, _ = await run_verification_pipeline(investigation, db)
-            assistant_message = _short_report_text(final_report, risk_score, risk_level)
-            report_msg = Message(investigation_id=investigation_id, role="assistant", content=assistant_message)
-            db.add(report_msg)
-            await db.commit()
-        except Exception as exc:
-            logger.error("Auto-verification failed for investigation_id=%s: %s", investigation_id, exc, exc_info=True)
-            # Keep the investigator's own message; student can click
-            # "Run full verification" manually as a fallback.
-    elif ready and not updated_case.is_sufficient_for_verification():
-        # Hit the question cap but still don't have university+agent/payment -
-        # be honest about it in the chat instead of silently trying to verify
-        # near-empty data.
-        assistant_message = (
-            "I don't have quite enough confirmed details yet (I still need at least the "
-            "university name, plus either the agent's name or the payment amount) to run "
-            "a reliable check. Please share whatever you do know and I'll do my best with it."
-        )
-        followup_msg = Message(investigation_id=investigation_id, role="assistant", content=assistant_message)
-        db.add(followup_msg)
+        updated = await extract_and_merge_case(payload.message, current)
+        investigation.structured_case = updated.model_dump()
+        assistant_message = await _save_report(investigation, db, payload.message)
+        db.add(Message(investigation_id=investigation_id, role="assistant", content=assistant_message))
         await db.commit()
+    except Exception as exc:
+        logger.error("Simple follow-up verification failed: %s", exc, exc_info=True)
+        await db.rollback()
+        raise HTTPException(status_code=502, detail=f"Verification assistant is temporarily unavailable: {exc}") from exc
 
     return MessageResponse(
         assistant_message=assistant_message,
-        structured_case=updated_case,
-        ready_for_verification=ready,
+        structured_case=updated,
+        ready_for_verification=True,
     )
 
 
@@ -207,111 +119,62 @@ async def get_investigation(investigation_id: str, db: AsyncSession = Depends(ge
     if not investigation:
         raise HTTPException(status_code=404, detail="Investigation not found")
 
-    message_result = await db.execute(
-        select(Message).where(Message.investigation_id == investigation_id).order_by(Message.created_at)
-    )
-    messages = [
-        MessageRecord(
-            id=m.id,
-            role=m.role,
-            content=m.content,
-            created_at=m.created_at.isoformat(),
-        )
-        for m in message_result.scalars().all()
-    ]
+    messages_result = await db.execute(select(Message).where(Message.investigation_id == investigation_id).order_by(Message.created_at))
+    messages = [MessageRecord(id=m.id, role=m.role, content=m.content, created_at=m.created_at.isoformat()) for m in messages_result.scalars().all()]
 
-    evidence_result = await db.execute(
-        select(EvidenceItem).where(EvidenceItem.investigation_id == investigation_id).order_by(EvidenceItem.created_at)
-    )
+    evidence_result = await db.execute(select(EvidenceItem).where(EvidenceItem.investigation_id == investigation_id).order_by(EvidenceItem.created_at))
     evidence = []
     for item in evidence_result.scalars().all():
         label = Path(item.file_path).name if item.file_path else "Pasted evidence"
-        mime = None
-        evidence_type = item.evidence_type
-        if evidence_type == "document":
-            mime = "application/pdf"
-        elif evidence_type == "image" and item.file_path:
-            # No dedicated mime column on EvidenceItem (see database/models.py) -
-            # infer a reasonable default from the stored file's extension rather
-            # than leaving this null, since the upload endpoint already
-            # validated it was an image/* content type before saving it.
-            suffix = Path(item.file_path).suffix.lower()
-            mime = {
-                ".png": "image/png",
-                ".jpg": "image/jpeg",
-                ".jpeg": "image/jpeg",
-                ".webp": "image/webp",
-                ".gif": "image/gif",
-                ".heic": "image/heic",
-            }.get(suffix, "image/*")
-        evidence.append(
-            EvidenceItemSummary(
-                id=item.id,
-                evidence_type=evidence_type,
-                label=label,
-                mime=mime,
-                size_bytes=None,
-                created_at=item.created_at.isoformat(),
-            )
-        )
+        mime = "application/pdf" if item.evidence_type == "document" else None
+        evidence.append(EvidenceItemSummary(
+            id=item.id, evidence_type=item.evidence_type, label=label, mime=mime,
+            size_bytes=None, created_at=item.created_at.isoformat(),
+        ))
 
+    report = FinalReport(**investigation.final_report) if investigation.final_report else None
     display_status, display_emoji = (None, None)
-    report_data = investigation.final_report
-    report = FinalReport(**report_data) if report_data else None
-    if report is not None and investigation.risk_level:
+    if report is not None:
         domain_statuses = {d.domain: (d.status, d.summary) for d in report.domains}
         display_status, display_emoji = derive_display_status(investigation.risk_level, domain_statuses)
 
     return InvestigationResponse(
         investigation_id=investigation.id,
         status=investigation.status,
-        structured_case=StructuredCase(**investigation.structured_case),
-        report=report.model_dump(mode="json") if report else None,
+        structured_case=StructuredCase(**(investigation.structured_case or {})),
+        report=report,
         display_status=display_status,
         display_emoji=display_emoji,
         messages=messages,
         evidence=evidence,
-        created_at=investigation.created_at.isoformat(),
-        updated_at=investigation.updated_at.isoformat(),
+        created_at=investigation.created_at.isoformat() if investigation.created_at else None,
+        updated_at=investigation.updated_at.isoformat() if investigation.updated_at else None,
     )
 
 
 @router.post("/{investigation_id}/context", response_model=MessageResponse)
-async def update_context(
-    investigation_id: str, payload: ContextUpdateRequest, db: AsyncSession = Depends(get_db)
-):
+async def update_context(investigation_id: str, payload: ContextUpdateRequest, db: AsyncSession = Depends(get_db)):
     investigation = await db.get(Investigation, investigation_id)
     if not investigation:
         raise HTTPException(status_code=404, detail="Investigation not found")
-    if not payload.updates:
-        raise HTTPException(status_code=400, detail="No updates supplied")
-
-    allowed = {"country", "degree_level", "university", "program", "agent", "payment_amount_pkr", "funding_type", "scholarship"}
-    current = StructuredCase(**investigation.structured_case).model_dump()
-    payment_amount = payload.updates.get("payment_amount_pkr", current.get("payment_amount"))
+    current = StructuredCase(**(investigation.structured_case or {}))
+    data = current.model_dump()
     for key, value in payload.updates.items():
-        if key not in allowed:
-            continue
-        if key == "payment_amount_pkr":
-            current["payment_amount"] = value
-        elif key in {"degree_level", "funding_type", "scholarship"}:
-            current[key] = value
-        else:
-            current[key] = value
-
-    if payment_amount is not None:
-        current["payment_amount"] = payment_amount
-
-    changed = ", ".join(f"{k}: {v}" for k, v in payload.updates.items())
-    message_text = f"[Investigation profile updated] {changed}" + (f" — {payload.note}" if payload.note else "")
-    db.add(Message(investigation_id=investigation_id, role="user", content=message_text))
-    assistant_text = "I’ve updated the investigation profile. Continue the conversation or run verification again when you’re ready."
-    db.add(Message(investigation_id=investigation_id, role="assistant", content=assistant_text))
-    investigation.structured_case = current
-    investigation.status = "ready_for_verification" if StructuredCase(**current).is_sufficient_for_verification() else "in_progress"
-    await db.commit()
+        if key in data:
+            data[key] = value
+    investigation.structured_case = StructuredCase(**data).model_dump()
+    note = payload.note or "Updated investigation details."
+    db.add(Message(investigation_id=investigation_id, role="user", content=note))
+    try:
+        assistant_message = await _save_report(investigation, db, note)
+        db.add(Message(investigation_id=investigation_id, role="assistant", content=assistant_message))
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        logger.error("Context verification failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=502, detail=f"Verification assistant is temporarily unavailable: {exc}") from exc
     return MessageResponse(
-        assistant_message=assistant_text,
-        structured_case=StructuredCase(**current),
-        ready_for_verification=investigation.status == "ready_for_verification",
+        assistant_message=assistant_message,
+        structured_case=StructuredCase(**investigation.structured_case),
+        ready_for_verification=True,
     )
