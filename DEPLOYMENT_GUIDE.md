@@ -101,7 +101,7 @@ the browser call FastAPI directly instead of proxying through Next.js.
    | Variable | Value |
    |---|---|
    | `DATABASE_URL` | the Railway Postgres URL from Step 2 |
-   | `BACKEND_URL` | the backend's Railway URL from Step 1, e.g. `https://<backend-service>.up.railway.app` (no trailing slash) |
+   | `BACKEND_URL` | **Prefer Railway's private networking** over the public URL: `http://${{<backend-service-name>.RAILWAY_PRIVATE_DOMAIN}}:${{<backend-service-name>.PORT}}` (e.g. if your backend service is named `files`: `http://${{files.RAILWAY_PRIVATE_DOMAIN}}:${{files.PORT}}`). This keeps server-to-server traffic on Railway's internal network — faster, and never touches the public internet. It uses plain `http://`, not `https://`, which is correct for private networking (no TLS termination needed inside the private network) and works fine with `fetch()` in `backendClient.ts`. Only fall back to the public HTTPS URL from Step 1 (`https://<backend-service>.up.railway.app`) if private networking isn't available in your Railway plan/region. |
    | `GEMINI_API_KEY` | optional — only used by the internal fallback engine's LLM enrichment; harmless to set or leave blank since `BACKEND_URL` routes investigations to FastAPI instead |
 
    Leave `NEXT_PUBLIC_API_BASE_URL` **unset** — this keeps the browser
@@ -243,7 +243,9 @@ and the frontend live variables are:
 
 ```text
 DATABASE_URL=${{Postgres.DATABASE_URL}}
-BACKEND_URL=https://<backend-domain>
+BACKEND_URL=http://${{files.RAILWAY_PRIVATE_DOMAIN}}:${{files.PORT}}
 ```
+
+(Replace `files` with your backend service's actual Railway service name if different. This is Railway's private-networking reference syntax — resolved automatically at deploy time to the backend's internal address, never a public URL.)
 
 Do not set `NEXT_PUBLIC_API_BASE_URL` for the Railway deployment.

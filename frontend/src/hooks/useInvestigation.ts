@@ -50,6 +50,10 @@ export interface UseInvestigation {
 export function useInvestigation(initial?: {
   investigation?: InvestigationRecord | null;
   language?: Language;
+  /** Lets callers (e.g. ChatView reopening a saved investigation) seed which
+   * backend produced the initial data, instead of always defaulting to the
+   * internal engine and briefly mislabeling live-backend investigations. */
+  mode?: "internal_engine" | "external_backend" | "mock_demo";
 }): UseInvestigation {
   const [investigationId, setInvestigationId] = useState<string | null>(
     initial?.investigation?.id ?? null,

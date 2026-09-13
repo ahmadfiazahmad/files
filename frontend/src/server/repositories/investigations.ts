@@ -223,7 +223,19 @@ export async function ensureExternalInvestigation(input: {
   await ensureSeeded();
   const existing = await getInvestigationRowByExternalId(input.externalId);
   if (existing) return existing;
-  return createInvestigation({ ...input, externalId: input.externalId });
+  try {
+    return await createInvestigation({ ...input, externalId: input.externalId });
+  } catch (error) {
+    // Two near-simultaneous requests for a brand-new investigation (e.g. the
+    // chat POST and an evidence upload firing back-to-back) can both miss
+    // the existing-row check above and both attempt to insert. The unique
+    // index on external_id (see db/schema.ts) makes the second insert fail
+    // rather than silently duplicate the row — recover by re-reading the
+    // row the other request just created instead of surfacing a 500.
+    const raced = await getInvestigationRowByExternalId(input.externalId);
+    if (raced) return raced;
+    throw error;
+  }
 }
 
 export async function getInvestigationRow(id: number) {

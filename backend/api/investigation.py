@@ -161,6 +161,20 @@ async def get_investigation(investigation_id: str, db: AsyncSession = Depends(ge
         evidence_type = item.evidence_type
         if evidence_type == "document":
             mime = "application/pdf"
+        elif evidence_type == "image" and item.file_path:
+            # No dedicated mime column on EvidenceItem (see database/models.py) -
+            # infer a reasonable default from the stored file's extension rather
+            # than leaving this null, since the upload endpoint already
+            # validated it was an image/* content type before saving it.
+            suffix = Path(item.file_path).suffix.lower()
+            mime = {
+                ".png": "image/png",
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".webp": "image/webp",
+                ".gif": "image/gif",
+                ".heic": "image/heic",
+            }.get(suffix, "image/*")
         evidence.append(
             EvidenceItemSummary(
                 id=item.id,
